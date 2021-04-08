@@ -33,9 +33,7 @@ from vast.voidfinder.multizmask import generate_mask
 from vast.voidfinder.preprocessing import file_preprocess
 from vast.voidfinder.table_functions import to_vector, to_array
 
-from astropy.table import Table
 import pickle
-import numpy as np
 
 
 
@@ -146,6 +144,7 @@ temp_infile.close()
 
 wall_coords_xyz, field_coords_xyz, hole_grid_shape, coords_min = filter_galaxies(galaxy_data_table,
                                                                                  survey_name,
+                                                                                 out_directory,
                                                                                  dist_limits=dist_limits,
                                                                                  #mag_cut_flag=mag_cut,
                                                                                  #rm_isolated_flag=rm_isolated,
@@ -177,12 +176,15 @@ temp_infile.close()
 
 
 find_voids(wall_coords_xyz, 
-           dist_limits,
-           mask, 
-           mask_resolution,
            coords_min,
            hole_grid_shape,
            survey_name,
+           mask_type='ra_dec_z',
+           mask=mask, 
+           mask_resolution=mask_resolution,
+           min_dist=dist_limits[0],
+           max_dist=dist_limits[1],
+           xyz_limits=None,
            #save_after=50000,
            #use_start_checkpoint=True,
            #hole_grid_edge_length=5.0,
@@ -190,7 +192,7 @@ find_voids(wall_coords_xyz,
            #hole_center_iter_dist=1.0,
            maximal_spheres_filename=out1_filename,
            void_table_filename=out2_filename,
-           potential_voids_filename=survey_name+'potential_voids_list.txt',
+           potential_voids_filename=out_directory + survey_name + 'potential_voids_list.txt',
            num_cpus=num_cpus,
            batch_size=10000,
            verbose=0,

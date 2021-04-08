@@ -36,6 +36,8 @@ from .constants import c
 
 from ._voidfinder_cython import check_mask_overlap
 
+from ._voidfinder_cython_find_next import MaskChecker
+
 
 ################################################################################
 DtoR = np.pi/180.
@@ -46,29 +48,27 @@ RtoD = 180./np.pi
 
 def filter_galaxies(galaxy_table,
                     survey_name, 
-                    mag_cut_flag=True, 
+                    out_directory,
+                    mag_cut=True, 
                     dist_limits=None,
-                    rm_isolated_flag=True,
+                    rm_isolated=True,
                     write_table=True,
                     sep_neighbor=3,
-                    distance_metric='comoving', 
+                    dist_metric='comoving', 
                     h=1.0,
                     hole_grid_edge_length=5.0,
                     magnitude_limit=-20.09,
                     verbose=0):
     """
-    Description
-    ===========
-    
     A hodge podge of miscellaneous tasks which need to be done to format the data into
     something the main find_voids() function can use.
     
-    1). Optional magnitude cut
-    2). Convert from ra-dec-redshift space into xyz space
-    3). Calculate the hole search grid shape
-    4). Optional remove isolated galaxies by partitioning them into wall (non-isolated)
-            and field (isolated) groups
-    5). Optionally write out the wall and field galaxies to disk
+    1) Optional magnitude cut
+    2) Convert from ra-dec-redshift space into xyz space
+    3) Calculate the hole search grid shape
+    4) Optional remove isolated galaxies by partitioning them into wall (non-isolated)
+       and field (isolated) groups
+    5) Optionally write out the wall and field galaxies to disk
     
     
     Parameters
@@ -82,8 +82,11 @@ def filter_galaxies(galaxy_table,
         
     survey_name : str
         Name of the galxy catalog, string value to prepend or append to output names
+
+    out_directory : string
+        Directory path for output files
         
-    mag_cut_flag : bool
+    mag_cut : bool
         whether or not to cut on magnitude, removing galaxies less than
         magnitude_limit
 
@@ -93,7 +96,7 @@ def filter_galaxies(galaxy_table,
     magnitude_limit : float
         value at which to perform magnitude cut
         
-    rm_isolated_flag : bool
+    rm_isolated : bool
         whether or not to perform Nth neighbor distance calculation, and use it
         to partition the input galaxies into wall and field galaxies
         
@@ -104,7 +107,7 @@ def filter_galaxies(galaxy_table,
     sep_neighbor : int, positive
         if rm_isolated_flag is true, find the Nth galaxy neighbors based on this value
         
-    distance_metric : str
+    dist_metric : str
         Distance metric to use in calculations.  Options are 'comoving' 
         (default; distance dependent on cosmology) and 'redshift' (distance 
         independent of cosmology).
@@ -146,14 +149,14 @@ def filter_galaxies(galaxy_table,
     # Filter based on magnitude and convert from redshift to radius if necessary
     #---------------------------------------------------------------------------
     # Remove faint galaxies
-    if mag_cut_flag:
+    if mag_cut:
         
         galaxy_table = galaxy_table[galaxy_table['rabsmag'] <= magnitude_limit]
 
     # Remove galaxies outside redshift range
     if dist_limits is not None:
 
-        if distance_metric == 'comoving':
+        if dist_metric == 'comoving':
 
             distance_boolean = np.logical_and(galaxy_table['Rgal'] >= dist_limits[0], 
                                               galaxy_table['Rgal'] <= dist_limits[1])
@@ -168,9 +171,7 @@ def filter_galaxies(galaxy_table,
 
 
     # Convert galaxy coordinates to Cartesian
-    coords_xyz = ra_dec_to_xyz(galaxy_table,
-                               distance_metric,
-                               h)
+    coords_xyz = ra_dec_to_xyz(galaxy_table, dist_metric, h)
     ############################################################################
 
     
@@ -178,8 +179,8 @@ def filter_galaxies(galaxy_table,
     ############################################################################
     # Grid shape
     #---------------------------------------------------------------------------
-    hole_grid_shape, coords_min = calculate_grid(coords_xyz,
-                                                 hole_grid_edge_length)
+    hole_grid_shape, coords_min, coords_max = calculate_grid(coords_xyz,
+                                                             hole_grid_edge_length)
     ############################################################################
 
 
@@ -187,7 +188,7 @@ def filter_galaxies(galaxy_table,
     ############################################################################
     # Separation
     #---------------------------------------------------------------------------
-    if rm_isolated_flag:
+    if rm_isolated:
         
         wall_gals_xyz, field_gals_xyz = wall_field_separation(coords_xyz,
                                                               sep_neighbor=sep_neighbor,
@@ -212,14 +213,14 @@ def filter_galaxies(galaxy_table,
     
         wall_xyz_table = Table(data=wall_gals_xyz, names=["x", "y", "z"])
         
-        wall_xyz_table.write(survey_name + 'wall_gal_file.txt', 
+        wall_xyz_table.write(out_directory + survey_name + 'wall_gal_file.txt', 
                              format='ascii.commented_header', 
                              overwrite=True)
     
         
         field_xyz_table = Table(data=field_gals_xyz, names=["x", "y", "z"])
     
-        field_xyz_table.write(survey_name + 'field_gal_file.txt', 
+        field_xyz_table.write(out_directory + survey_name + 'field_gal_file.txt', 
                               format='ascii.commented_header', 
                               overwrite=True)
         
@@ -259,9 +260,6 @@ def ra_dec_to_xyz(galaxy_table,
                   h=1.0,
                   ):
     """
-    Description
-    ===========
-    
     Convert galaxy coordinates from ra-dec-redshift space into xyz space.
     
     
@@ -334,9 +332,6 @@ def ra_dec_to_xyz(galaxy_table,
 def calculate_grid(galaxy_coords_xyz,
                    hole_grid_edge_length):
     """
-    Description
-    ===========
-    
     Given a galaxy survey in xyz/Cartesian coordinates and the length
     of a cubical grid cell, calculate the cubical grid shape which will
     contain the survey.
@@ -385,7 +380,7 @@ def calculate_grid(galaxy_coords_xyz,
     
     hole_grid_shape = tuple(np.ceil(ngrid).astype(int))
     
-    return hole_grid_shape, coords_min
+    return hole_grid_shape, coords_min, coords_max
     
     
 
@@ -397,9 +392,6 @@ def wall_field_separation(galaxy_coords_xyz,
                           sep_neighbor=3,
                           verbose=0):
     """
-    Description
-    ===========
-    
     Given a set of galaxy coordinates in xyz space, find all the galaxies whose
     distance to their Nth nearest neighbor is above or below some limit.  Galaxies
     whose Nth nearest neighbor is close (below), will become 'wall' galaxies, and
@@ -502,12 +494,15 @@ def wall_field_separation(galaxy_coords_xyz,
 
 
 def find_voids(galaxy_coords_xyz,
-               dist_limits,
-               mask, 
-               mask_resolution,
                coords_min,
                hole_grid_shape,
                survey_name,
+               mask_type='ra_dec_z',
+               mask=None, 
+               mask_resolution=None,
+               min_dist=None,
+               max_dist=None,
+               xyz_limits=None,
                max_hole_mask_overlap=0.1,
                hole_grid_edge_length=5.0,
                galaxy_map_grid_edge_length=None,
@@ -523,10 +518,6 @@ def find_voids(galaxy_coords_xyz,
                print_after=5.0,
                ):
     """
-    Description:
-    ============
-    
-    
     Main entry point for VoidFinder.  
     
     Using the VoidFinder algorithm, this function grows a sphere in each empty 
@@ -603,10 +594,9 @@ def find_voids(galaxy_coords_xyz,
     
     To do this, VoidFinder makes the following assumptions:
     
-    1.  A Void region can be approximated by a sphere.
-    
-        1.a. the center of the maximal sphere in that void region will yield the 
-             x-y-z
+    1.  A Void region can be approximated by a union of spheres.  Note: the 
+        center of the maximal sphere in that void region will yield the x-y-z 
+        coordinate of that void region.
         
     2.  Void regions are distinct/discrete - we are not looking for huge 
         tunneling structures throughout space, if does happen to be the 
@@ -624,10 +614,26 @@ def find_voids(galaxy_coords_xyz,
     galaxy_coords_xyz : numpy.ndarray of shape (num_galaxies, 3)
         coordinates of the galaxies in the survey, units of Mpc/h 
         (xyz space)
+        
+    mask_type : string, 'ra_dec_z' or 'xyz'
+        Determines the mode of mask checking to use and what mask parameters
+        to use.  ra_dec_z means the mask, mask_resolution, and dist_limits parameters
+        will be provided representing an angular `mask` in Right Ascension and Declination
+        and a corresponding mask_resolution integer, as well as dist_limits representing
+        the min and max redshift values represented as radial distances in the xyz space
+        
+        'xyz' means that the xyz_limits parameter will be provided which directly encodes
+        a bounding box for the survey in xyz space
+        
     
     dist_limits : numpy array of shape (2,)
         minimum and maximum distance limit of the survey in units of Mpc/h 
         (xyz space)
+        
+    xyz_limits : numpy array of shape (2,3)
+        format [x_min, y_min, z_min]
+               [x_max, y_max, z_max]
+        to be used for checking against the mask when mask_type == 'xyz'
         
     mask : numpy.ndarray of shape (N,M) type bool
         represents the survey footprint in scaled ra/dec space.  Value of True 
@@ -701,14 +707,12 @@ def find_voids(galaxy_coords_xyz,
         value, if you batch size is 10,000 and your save_after is 1,000,000 you 
         might actually get a checkpoint at say 1,030,000.  If None, disables 
         saving the checkpoint file.
-        
     
     use_start_checkpoint : bool
         Whether to attempt looking for a VoidFinderCheckpoint.h5 file which can 
         be used to restart the VF run.  If False, VoidFinder will start fresh 
         from 0.
     
-        
     batch_size : int
         number of potential void cells to evaluate at a time.  Lower values may 
         be a bit slower as it involves some memory allocation overhead, and 
@@ -737,8 +741,18 @@ def find_voids(galaxy_coords_xyz,
     
     """
     
-    print('Growing holes', flush=True)
     
+    if mask_type == "ra_dec_z":
+        mask_mode = 0
+    elif mask_type == "xyz":
+        mask_mode = 1
+    else:
+        raise ValueError("mask_type must be 'ra_dec_z' or 'xyz'")
+    
+    
+    
+    print('Growing holes', flush=True)
+        
     ############################################################################
     # GROW HOLES
     #---------------------------------------------------------------------------
@@ -753,12 +767,18 @@ def find_voids(galaxy_coords_xyz,
                                           hole_center_iter_dist,
                                           galaxy_map_grid_edge_length,
                                           coords_min.reshape(1,3),
-                                          mask,
-                                          mask_resolution,
-                                          dist_limits[0],
-                                          dist_limits[1],
+                                          #mask,
+                                          #mask_resolution,
+                                          #dist_limits[0],
+                                          #dist_limits[1],
                                           galaxy_coords_xyz,
                                           survey_name,
+                                          mask_mode=mask_mode,
+                                          mask=mask,
+                                          mask_resolution=mask_resolution,
+                                          min_dist=min_dist,
+                                          max_dist=max_dist,
+                                          xyz_limits=xyz_limits,
                                           #radial_mask_check,
                                           save_after=save_after,
                                           use_start_checkpoint=use_start_checkpoint,
@@ -774,6 +794,24 @@ def find_voids(galaxy_coords_xyz,
     ############################################################################
 
 
+
+
+    if mask_mode == 0:
+        mask_checker = MaskChecker(mask_mode,
+                                   survey_mask_ra_dec=mask.astype(np.uint8),
+                                   n=mask_resolution,
+                                   rmin=min_dist,
+                                   rmax=max_dist,
+                                   )
+        
+    elif mask_mode == 1:
+        mask_checker = MaskChecker(mask_mode,
+                                   xyz_limits=xyz_limits)
+
+
+
+
+
     
     ############################################################################
     # CHECK IF 90% OF VOID VOLUME IS WITHIN SURVEY LIMITS
@@ -783,14 +821,12 @@ def find_voids(galaxy_coords_xyz,
     vol_cut_start = time.time()
     
     valid_idx, monte_index = check_hole_bounds(x_y_z_r_array, 
-                                              mask.astype(np.uint8), 
-                                              mask_resolution, 
-                                              dist_limits,
-                                              cut_pct=0.1,
-                                              pts_per_unit_volume=.01,
-                                              num_surf_pts=20,
-                                              num_cpus=num_cpus,
-                                              verbose=verbose)
+                                               mask_checker,
+                                               cut_pct=0.1,
+                                               pts_per_unit_volume=.01,
+                                               num_surf_pts=20,
+                                               num_cpus=num_cpus,
+                                               verbose=verbose)
     
     print("Found ", np.sum(np.logical_not(valid_idx)), "holes to cut", 
           time.time() - vol_cut_start, flush=True)
